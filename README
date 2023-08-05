@@ -24,3 +24,7 @@ TODO
 1. add a background thread that is responsible for:
    - running the resolution loop when server resolutions are pending.
    - resubmit servers for resolution when their DNS TTL is within N seconds of expiring
+   - Add tests
+       - functional, resolution, persistence (in/out), TTL
+	   - performance
+	   - scalability, memory used for N server names
