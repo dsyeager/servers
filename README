@@ -1,0 +1,26 @@
+A single class to handle dns resolution for multiple scenarios.
+The linux udns library is used for resolution
+
+
+1. (original) CLI tool need to connect to a list of unique servers, all the same port
+   - the list of servers are added to this class, add_servers(txt)
+   - the tool has one or more threads waiting for the resolved servers, get_server()
+   - the server names are resolved asynchronously
+   - as server names are resolved, waiting threads are woken up 
+
+2. (new) CLI tool needs to connect to a single server N times
+   - the server is added to this class
+   - one or more threads will call get_server(server_name), which will wait until the resoved info is ready
+   - after the server is resolved, waiting threads are woken up
+
+3. (new) A daemon or long running CLI tool needs to connect to one or more servers.
+   - the original list of servers are added to this class, add_servers(txt)
+   - new servers are added as needed with add_server(srv_name, port)
+   - get_server(server, port) is used to find resolved addrs
+   - a background thread re-resolves servers that are within N seconds of their TTL
+  
+
+TODO
+1. add a background thread that is responsible for:
+   - running the resolution loop when server resolutions are pending.
+   - resubmit servers for resolution when their DNS TTL is within N seconds of expiring
