@@ -1,0 +1,3 @@
+[submodule "extern/string_view"]
+	path = extern/string_view
+	url = https://github.com/dsyeager/string_view

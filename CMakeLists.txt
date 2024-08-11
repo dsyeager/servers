@@ -5,6 +5,7 @@ project(
   VERSION 1.0
   LANGUAGES CXX)
 
+add_subdirectory(extern/string_view)
 add_subdirectory(tests)
 
 # relies on libudns, probably a cmake cmd to install as needed

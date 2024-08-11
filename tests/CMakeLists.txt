@@ -11,6 +11,6 @@ include_directories(../../string_view/src)
 include_directories(../../ehttp/src)
 include_directories(../../misc)
 
-add_executable(test_logic test_servers.cc)
-target_link_libraries(test_logic -ludns)
+add_executable(test_servers_logic test_servers.cc)
+target_link_libraries(test_servers_logic -ludns)
 
