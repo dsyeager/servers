@@ -5,6 +5,7 @@
 #include "ntoa.h"
 #include "string_view.h"
 #include "to_file.h"
+#include "string_helpers.h"
 #include "string_view.h"
 
 #include <arpa/inet.h>
@@ -33,18 +34,21 @@ class server
 {
 public:
     server(dsy::string_view name, uint16_t port, servers *srvs, time_t now)
-        :m_name(name), m_port(port), m_servers(srvs), m_start_time(now)
+    :m_name(name), m_port(port), m_servers(srvs), m_start_time(now)
     {
-        // This is not ipv6 friendly, the split on ':' would need to find the last ']' then look for ':'
         dsy::string_view sv_port = name.split(' ');
-        dsy::string_view sv_name = sv_port.split(':');
-        m_name = sv_name;
+
+        // sv_port should be ipv4 or ipv6
+        // 192.168.0.4:443
+        // [2001:db8:85a3:8d3:1319:8a2e:370:7348]:443
+        //dsy::string_view sv_name = sv_port.rsplit(':');
+        m_name = sv_port.rsplit(':');
         if (!sv_port.empty())
         {
-        sv_port.aton(m_port);
+            sv_port.aton(m_port);
         }
         m_alt_name = name;
-std::cout << m_name << ", alt: " << m_alt_name << ", port: " << m_port << std::endl;
+        //std::cout << m_name << ", alt: " << m_alt_name << ", port: " << m_port << std::endl;
     }
 
     dsy::string_view name() const { return m_name; }
@@ -52,7 +56,8 @@ std::cout << m_name << ", alt: " << m_alt_name << ", port: " << m_port << std::e
 
     uint16_t port() const { return m_port; }
 
-    void add_addrinfo(addrinfo *ai) { m_addrs.push_back(ai); }
+    void add_addrinfo(addrinfo *ai) { m_addrs.push_back(std::make_pair(ai, m_addrs.size())); }
+    void add_addrinfo(addrinfo *ai, uint32_t index) { m_addrs.push_back(std::make_pair(ai, index)); }
 
     time_t get_dns_expires() const { return m_dns_expires; }
     void set_dns_expires(uint32_t ttl) { m_dns_expires = m_start_time + ((m_end_dns - m_start_dns) / CLOCKS_PER_SEC) + ttl; }
@@ -67,10 +72,18 @@ std::cout << m_name << ", alt: " << m_alt_name << ", port: " << m_port << std::e
         char s[INET6_ADDRSTRLEN];
         std::cout << m_name << " ips: " << std::endl;
 
-        for (auto addr : m_addrs)
+        for (auto [pai, index] : m_addrs)
         {
-            inet_ntop(addr->ai_family,  &((struct sockaddr_in *)addr->ai_addr)->sin_addr, s, sizeof(s));
-            std::cout << "\t" << s << std::endl;
+            if (pai->ai_family == AF_INET6)
+            {
+        	inet_ntop(pai->ai_family,  &((struct sockaddr_in *)pai->ai_addr)->sin_addr, s, sizeof(s));
+                std::cout << "\t" << s << std::endl;
+            }
+            else
+            {
+        	inet_ntop(pai->ai_family,  &((struct sockaddr_in6 *)pai->ai_addr)->sin6_addr, s, sizeof(s));
+                std::cout << "\t" << s << std::endl;
+            }
         }
     }
 
@@ -81,11 +94,17 @@ std::cout << m_name << ", alt: " << m_alt_name << ", port: " << m_port << std::e
         buff += ' ';
         ntoa(m_dns_expires, buff);
         char s[INET6_ADDRSTRLEN];
-        for (auto addr : m_addrs)
+        for (auto [pai, index] : m_addrs)
         {
-            buff += ' ';
-            inet_ntop(addr->ai_family,  &((struct sockaddr_in *)addr->ai_addr)->sin_addr, s, sizeof(s));
-            buff += s;
+            if (pai->ai_addrlen == sizeof(struct sockaddr_in))
+            {
+                inet_ntop(pai->ai_family,  &((struct sockaddr_in *)pai->ai_addr)->sin_addr, s, sizeof(s));
+            }
+            else
+            {
+                inet_ntop(pai->ai_family,  &((struct sockaddr_in6 *)pai->ai_addr)->sin6_addr, s, sizeof(s));
+            }
+            buff << ' ' << s << ',' << index;
         }
     }
 
@@ -94,65 +113,81 @@ std::cout << m_name << ", alt: " << m_alt_name << ", port: " << m_port << std::e
         m_dns_expires = expires;
         std::string port;
         ntoa(m_port, port);
+        uint32_t ind = 0;
 
         while (!line.empty())
         {
-            std::string ip(line.split(' '));
+            dsy::string_view index = line.split(' ');
+            std::string ip(index.split(','));
             struct addrinfo* cur = nullptr;
+            // use getaddrinfo to convert string IP's to addrinfo structs
             int res = getaddrinfo(ip.data(),   // node / host
-                          port.data(), // service / port
-                          &hints,    // hints
-                          &cur);
+                                  port.data(), // service / port
+                                  &hints,    // hints
+                                  &cur);
             if (res != 0)
             {
                 std::cout << "getaddrinfo failed for " << ip << std::endl;
                 continue;
             }
-            add_addrinfo(cur);
+            index.aton(ind);
+            add_addrinfo(cur, ind);
         }
 
         set_end_dns(get_nanoseconds());
         return !m_addrs.empty();
     }
-	
+
     int non_blocking_connect() const
     {
-		int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
-		int failures = 0;
+        int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+        int failures = 0;
 
-		for (addrinfo *pai : m_addrs)
-		{
-			sockaddr *addr = pai->ai_addr;
+        for (auto [pai, index] : m_addrs)
+        {
+// TODO handle ipv6
+// delay working on connect until I have a proper ground to run my servers with.
+            sockaddr *addr = pai->ai_addr;
 
-			int res = connect(fd, (struct sockaddr*)pai->ai_addr, sizeof(*pai->ai_addr));
-			if (!res || errno == EINPROGRESS)
-			{
-				return fd;
-			}
-			std::cerr << "connect failed, res: " << res 
-                  << ", fd: " << fd 
-                  << ", error: " << strerror(errno) << std::endl;
-			++failures;
+            int res = connect(fd, (struct sockaddr*)pai->ai_addr, sizeof(*pai->ai_addr));
+            if (!res || errno == EINPROGRESS)
+            {
+                return fd;
+            }
+            std::cerr << "connect failed, res: " << res
+                      << ", fd: " << fd
+                      << ", error: " << strerror(errno) << std::endl;
+            ++failures;
         }
 
-		return -1;
+        return -1;
     }
 
-    dns_query *dns_qry = nullptr; // public for now
+    void set_a4_dns_qry(dns_query *qry) { m_a4_dns_qry = qry; }
+    void set_a6_dns_qry(dns_query *qry) { m_a6_dns_qry = qry; }
+    bool is_dns_pending() { return m_a4_dns_qry || m_a6_dns_qry; } // could just be return m_a4_dns_qry - m_a6_dns_qry
+
 private:
     std::string m_name;
     std::string m_alt_name;
     std::string m_error;
     uint16_t m_port = 0;
     addrinfo *m_dns_result = nullptr;
-    std::vector<addrinfo*> m_addrs;
+    std::vector<std::pair<addrinfo*, uint32_t>> m_addrs;  /**
+                                                           * Each addrinfo has an ai_family attribute for AF_INET or AF_INET6
+                                                           * Depending on the ai_family value cast the ai_addr to sockaddr_in or sockaddr_in6
+                                                           * The uint32_t value is the index value for each address as received,
+                                                           * used for sorting the addresses
+                                                           */
     servers *m_servers = nullptr;
     time_t m_dns_expires = 0;
     time_t m_start_time = 0;
     uint64_t m_start_dns = 0;
     uint64_t m_end_dns = 0;
+    dns_query *m_a4_dns_qry = nullptr; // public for now
+    dns_query *m_a6_dns_qry = nullptr; // public for now
 
-    // need to store the addrinfo*'s in a vector for easier sorting 
+    // need to store the addrinfo*'s in a vector for easier sorting
     // will sort based on v4/v6 preference
 
     // serialize out
@@ -160,7 +195,7 @@ private:
     // - <srv> <expire epoch> <ip>,<ip>,<ip>,[<ip>]
     // serialize in
     // - for each ip call getaddrinfo adding results to m_addrs.
-    // - but only if not expired 
+    // - but only if not expired
 };
 
 
@@ -196,19 +231,20 @@ could:
 3. persist the resolved addrs
 */
         std::unique_lock alock(m_mutex);
-std::cout << "get_server, m_run: " << m_run << std::endl;           
+std::cout << "get_server, m_run: " << m_run << std::endl;
         while (m_run && m_servers_resolved.empty() && (m_servers_processed.empty() || m_servers_processed.size() != m_servers.size()))
         {
-            // might want an m_run var for early termination
-           //     std::cout << "waiting, thread: " << std::this_thread::get_id() << std::endl;
+        // might want an m_run var for early termination
+       //     std::cout << "waiting, thread: " << std::this_thread::get_id() << std::endl;
             m_waiters++;
             auto ret = m_cond.wait_for(alock, 100ms);
             m_waiters--;
             if (std::cv_status::timeout == ret)
             {
-        //        std::cout << "cond wait timed out" << std::endl;
+                if (m_verbose)
+               	    std::cout << "cond wait timed out" << std::endl;
             }
-        //    std::cout << "woke up, thread: " << std::this_thread::get_id() << std::endl;
+            //    std::cout << "woke up, thread: " << std::this_thread::get_id() << std::endl;
         }
 
         server* ret = nullptr;
@@ -228,38 +264,56 @@ std::cout << "get_server, m_run: " << m_run << std::endl;
     {
         for (auto &[name, srv] : m_servers)
         {
-            std::cout << "parsed: " << name << std::endl;
+            std::cerr << "parsed: " << name << std::endl;
         }
 
         for (auto &srv : m_servers_resolved)
         {
-            std::cout << "resolved: " << srv->name() << std::endl;
+            std::cerr << "resolved: " << srv->name() << std::endl;
         }
 
         for (auto &srv : m_servers_processed)
         {
-            std::cout << "processed: " << srv->name() << std::endl;
+            std::cerr << "processed: " << srv->name() << std::endl;
         }
 
-        std::cout << "parsed: " << m_servers.size()
-              << ", resolved: " << m_servers_resolved.size()
-              << ", processed: " << m_servers_processed.size() << std::endl;
+        std::cerr << "parsed: " << m_servers.size()
+                  << ", resolved: " << m_servers_resolved.size()
+                  << ", processed: " << m_servers_processed.size() << std::endl;
     }
 
-    void persist_servers(const char* fpath)
+    void build_servers_string(std::string &buff, bool verbose = false, uint32_t min_ttl = 0)
     {
-        std::string buff;
+        time_t min_expires = time(nullptr) + min_ttl;
+
         for (auto &[name, srv] : m_servers)
         {
+            if (srv->get_dns_expires() < min_expires)
+                continue;
             srv->to_string(buff);
             buff += '\n';
+            if (verbose)
+                buff << '\t' << "dns ns: " << srv->get_dns_ns() << '\n';
         }
+        buff.pop_back();
+    }
+
+    void print_servers_detailed()
+    {
+        std::string buff;
+        build_servers_string(buff, true);
+        std::cout << buff << std::endl;
+    }
+
+    void persist_servers(const char* fpath, uint32_t min_ttl)
+    {
+        std::string buff;
+        build_servers_string(buff, false, min_ttl);
         to_file(buff, fpath);
     }
 
     void unpersist_servers(const char* fpath)
     {
-fprintf(stderr, "unpersisting '%s'\n", fpath);
         if (!from_file(m_dns_data, fpath))
         {
             return;
@@ -271,7 +325,6 @@ fprintf(stderr, "unpersisting '%s'\n", fpath);
         {
             dsy::string_view line = data.split('\n');
             dsy::string_view host = line.split(' ');
-// TODO: we should unpersist it so we can re-resolve if it's ttl is expiring
             // no need to fully unpersist it until we actually use it
             m_dns_hosts[host] = line; // <expire time> <ip> <ip>....
         }
@@ -283,15 +336,21 @@ fprintf(stderr, "unpersisting '%s'\n", fpath);
         while (m_run && dns_active(m_dns_context))
         {
             size_t start_cnt = m_servers_resolved.size();
-            time_t now = time(0);
+            time_t now = time(nullptr);
             dns_ioevent(m_dns_context, now);
             dns_timeouts(m_dns_context, 2, now);
             loops++;
             if (m_servers_resolved.size() == start_cnt)
+            {
                 usleep(10000);
+            }
         }
-        std::cout << "resolve_addrs, loops: " << loops 
-              << ", servers resolved: " << m_servers_resolved.size() << std::endl;
+
+        if (m_verbose)
+        {
+            std::cerr << "resolve_addrs, loops: " << loops
+                      << ", servers resolved: " << m_servers_resolved.size() << std::endl;
+        }
         return true;
     }
 
@@ -310,8 +369,10 @@ fprintf(stderr, "unpersisting '%s'\n", fpath);
         if (!result)
         {
             if (m_verbose)
-                std::cout << "a4 failed for " << srv->name() << std::endl;
-            m_servers_failed_dns.push_back(srv);
+                std::cerr << "a4 failed for " << srv->name() << std::endl;
+            srv->set_a4_dns_qry(nullptr);
+            if (!srv->is_dns_pending())
+                m_servers_failed_dns.push_back(srv);
             return;
         }
 
@@ -319,17 +380,13 @@ fprintf(stderr, "unpersisting '%s'\n", fpath);
 
         uint32_t ttl = result->dnsa4_ttl ? std::min(result->dnsa4_ttl, m_max_dns_ttl) : m_max_dns_ttl;
         if (m_verbose > 1)
-            std::cout << "a4: cname: " << result->dnsa4_cname << ", ttl: " << ttl << std::endl;
+            std::cerr << "a4: cname: " << result->dnsa4_cname << ", ttl: " << ttl << std::endl;
 
         srv->set_dns_expires(ttl);
         struct addrinfo* cur = nullptr;
 
         for (int i = 0; i < result->dnsa4_nrr; ++i)
         {
-            cur = construct_addrinfo(&m_hints);
-            cur->ai_family = AF_INET;
-            cur->ai_addrlen = sizeof(struct sockaddr_in);
-
             sockaddr_in *addr = new struct sockaddr_in();
             addr->sin_family = AF_INET;
 // in a server/daemon scenario we may be accessing multiple ports on the server
@@ -337,12 +394,21 @@ fprintf(stderr, "unpersisting '%s'\n", fpath);
             addr->sin_port = htons(srv->port());
             addr->sin_addr = result->dnsa4_addr[i];
             memset(addr->sin_zero, 0, sizeof(addr->sin_zero));
+
+            cur = construct_addrinfo(&m_hints, AF_INET);
+            cur->ai_addrlen = sizeof(struct sockaddr_in);
+            cur->ai_addrlen = sizeof(sockaddr_in);
             cur->ai_addr = (struct sockaddr*)addr;
             srv->add_addrinfo(cur);
         }
+
         std::unique_lock alock(m_mutex);
-        m_servers_resolved.push_back(srv);
-        m_cond.notify_one();
+        srv->set_a4_dns_qry(nullptr);
+        if (!srv->is_dns_pending())
+        {
+            m_servers_resolved.push_back(srv);
+            m_cond.notify_one();
+        }
     }
 
     static
@@ -352,8 +418,67 @@ fprintf(stderr, "unpersisting '%s'\n", fpath);
         srv->get_servers()->a4_resolved(result, srv);
     }
 
+    void a6_resolved(struct dns_rr_a6 *result, server *srv)
+    {
+        srv->set_end_dns(get_nanoseconds());
+        if (!result)
+        {
+            if (m_verbose)
+                std::cout << "a6 failed for " << srv->name() << std::endl;
+            srv->set_a6_dns_qry(nullptr);
+            if (!srv->is_dns_pending())
+                m_servers_failed_dns.push_back(srv);
+            return;
+        }
+
+        dsy::string_view host = result->dnsa6_cname;
+
+        uint32_t ttl = result->dnsa6_ttl ? std::min(result->dnsa6_ttl, m_max_dns_ttl) : m_max_dns_ttl;
+        if (m_verbose > 1)
+            std::cout << "a6: cname: " << result->dnsa6_cname << ", ttl: " << ttl << std::endl;
+
+        // assumes that v4 and v6 have same expiration
+        srv->set_dns_expires(ttl);
+
+        struct addrinfo* cur = nullptr;
+
+        for (int i = 0; i < result->dnsa6_nrr; ++i)
+        {
+
+            sockaddr_in6 *addr = new struct sockaddr_in6();
+            //addr->sin_len = sizeof(sin6);
+            addr->sin6_family = AF_INET6;
+            addr->sin6_flowinfo = 0;
+            addr->sin6_port = htons(srv->port());
+            addr->sin6_addr = result->dnsa6_addr[i];
+
+// in a server/daemon scenario we may be accessing multiple ports on the server
+// suggesting that adding the port should come at a later stage
+
+            cur = construct_addrinfo(&m_hints, AF_INET6);
+            cur->ai_addrlen = sizeof(struct sockaddr_in6);
+            cur->ai_addr = (struct sockaddr*)addr;
+            srv->add_addrinfo(cur);
+        }
+
+        std::unique_lock alock(m_mutex);
+        srv->set_a6_dns_qry(nullptr);
+        if (!srv->is_dns_pending())
+        {
+            m_servers_resolved.push_back(srv);
+            m_cond.notify_one();
+        }
+    }
+
+    static
+    void a6_fn(dns_ctx *dns_context, struct dns_rr_a6 *result, void *data)
+    {
+        server *srv = static_cast<server*>(data);
+        srv->get_servers()->a6_resolved(result, srv);
+    }
+
 private:
-    addrinfo* construct_addrinfo(addrinfo *hints)
+    addrinfo* construct_addrinfo(addrinfo *hints, int family = AF_INET)
     {
         addrinfo *cur = new struct addrinfo();
         cur->ai_next = nullptr;
@@ -361,6 +486,7 @@ private:
         cur->ai_socktype = hints->ai_socktype;
         cur->ai_protocol = hints->ai_protocol;
         cur->ai_flags = hints->ai_flags;
+        cur->ai_family = family;
 
         return cur;
     }
@@ -370,7 +496,7 @@ private:
         size_t len = buff.length();
         size_t spos = 0;
         time_t now = time(nullptr);
-
+// TODO: rewrite this with string_view::split
         while (spos < len)
         {
             size_t epos = buff.find_first_of(delims, spos);
@@ -381,10 +507,10 @@ private:
                 psrv->set_start_dns(get_nanoseconds());
                 m_servers[psrv->name()] = psrv;
             }
-            spos = epos + 1; 
+            spos = epos + 1;
             if (epos == dsy::string_view::npos)
                 break;
-        } 
+        }
     }
 
     void start_resolution()
@@ -399,7 +525,8 @@ private:
             if (iter != m_dns_hosts.end())
             {
                 dsy::string_view line = iter->second;
-                time_t expires = aton<time_t>(line.split(' '));
+                dsy::string_view exp_str = line.split(' ');
+                time_t expires = aton<time_t>(exp_str);
                 if (expires > now)
                 {
                     if (srv->from_string(name, expires, line, m_hints))
@@ -410,17 +537,30 @@ private:
                         continue;
                     }
                 }
+                else
+                {
+                    if (m_verbose)
+                        std::cout << "start_resolution, m_dns_host entry is expired, host: " << name
+                                  << ", now >= exp (" << now << " >= " << expires << "), " << exp_str << std::endl;
+                }
             }
 
             // need to call getaddrinfo when the srv->name looks like an IP
 
-            if (srv->dns_qry)
+            if (srv->is_dns_pending())
                 continue;
-            srv->dns_qry = dns_submit_a4(m_dns_context,
-                                         srv->name_ptr(),
-                                         0,
-                                         a4_fn,
-                                         srv);
+
+            // TODO: think about moving the call to dns_submit_XXX into the server class
+            srv->set_a4_dns_qry(dns_submit_a4(m_dns_context,
+                                              srv->name_ptr(),
+                                              0,
+                                              a4_fn,
+                                              srv));
+            srv->set_a6_dns_qry(dns_submit_a6(m_dns_context,
+                                              srv->name_ptr(),
+                                              0,
+                                              a6_fn,
+                                              srv));
         }
 
         if (m_verbose)
@@ -443,7 +583,6 @@ private:
 
     addrinfo m_hints;
     uint32_t m_max_dns_ttl = 6 * 3600;
-
 
     size_t m_resolved_cnt = 0;
     uint32_t m_verbose = 0;
