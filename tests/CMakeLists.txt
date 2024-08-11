@@ -8,8 +8,8 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20 -O2")
 
 include_directories(../src)
 include_directories(../extern/string_view/src)
+include_directories(../extern/misc)
 include_directories(../../ehttp/src)
-include_directories(../../misc)
 
 add_executable(test_servers test_servers.cc)
 target_link_libraries(test_servers -ludns)
