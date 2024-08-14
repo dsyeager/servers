@@ -167,6 +167,8 @@ public:
     void set_a6_dns_qry(dns_query *qry) { m_a6_dns_qry = qry; }
     bool is_dns_pending() { return m_a4_dns_qry || m_a6_dns_qry; } // could just be return m_a4_dns_qry - m_a6_dns_qry
 
+    size_t addr_cnt() const { return m_addrs.size(); }
+
 private:
     std::string m_name;
     std::string m_alt_name;
@@ -368,11 +370,19 @@ std::cout << "get_server, m_run: " << m_run << std::endl;
         srv->set_end_dns(get_nanoseconds());
         if (!result)
         {
+            srv->set_a4_dns_qry(nullptr);
             if (m_verbose)
                 std::cerr << "a4 failed for " << srv->name() << std::endl;
-            srv->set_a4_dns_qry(nullptr);
             if (!srv->is_dns_pending())
-                m_servers_failed_dns.push_back(srv);
+            {
+                if (srv->addr_cnt())
+                {
+                    m_servers_resolved.push_back(srv);
+                    m_cond.notify_one();
+                }
+                else
+                    m_servers_failed_dns.push_back(srv);
+            }
             return;
         }
 
@@ -427,7 +437,15 @@ std::cout << "get_server, m_run: " << m_run << std::endl;
                 std::cout << "a6 failed for " << srv->name() << std::endl;
             srv->set_a6_dns_qry(nullptr);
             if (!srv->is_dns_pending())
-                m_servers_failed_dns.push_back(srv);
+            {
+                if (srv->addr_cnt())
+                {
+                    m_servers_resolved.push_back(srv);
+                    m_cond.notify_one();
+                }
+                else
+                    m_servers_failed_dns.push_back(srv);
+            }
             return;
         }
 
