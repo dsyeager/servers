@@ -56,8 +56,33 @@ public:
 
     uint16_t port() const { return m_port; }
 
-    void add_addrinfo(addrinfo *ai) { m_addrs.push_back(std::make_pair(ai, m_addrs.size())); }
-    void add_addrinfo(addrinfo *ai, uint32_t index) { m_addrs.push_back(std::make_pair(ai, index)); }
+    void add_addrinfo(addrinfo *ai)
+    {
+        m_addrs.push_back(std::make_pair(ai, m_addrs.size()));
+    }
+    void add_addrinfo(addrinfo *ai, uint32_t index)
+    {
+        m_addrs.push_back(std::make_pair(ai, index));
+    }
+
+    void to_str(auto str)
+    {
+        char s[INET6_ADDRSTRLEN];
+        str << m_name << " ips: \n";
+
+        for (auto [pai, index] : m_addrs)
+        {
+            if (pai->ai_family == AF_INET6)
+            {
+        	    inet_ntop(pai->ai_family,  &((struct sockaddr_in *)pai->ai_addr)->sin_addr, s, sizeof(s));
+            }
+            else
+            {
+        	    inet_ntop(pai->ai_family,  &((struct sockaddr_in6 *)pai->ai_addr)->sin6_addr, s, sizeof(s));
+            }
+            str << "\t" << s << '\n';
+        }
+    }
 
     time_t get_dns_expires() const { return m_dns_expires; }
     void set_dns_expires(uint32_t ttl) { m_dns_expires = m_start_time + ((m_end_dns - m_start_dns) / CLOCKS_PER_SEC) + ttl; }
@@ -76,12 +101,12 @@ public:
         {
             if (pai->ai_family == AF_INET6)
             {
-        	inet_ntop(pai->ai_family,  &((struct sockaddr_in *)pai->ai_addr)->sin_addr, s, sizeof(s));
+        	    inet_ntop(pai->ai_family,  &((struct sockaddr_in *)pai->ai_addr)->sin_addr, s, sizeof(s));
                 std::cout << "\t" << s << std::endl;
             }
             else
             {
-        	inet_ntop(pai->ai_family,  &((struct sockaddr_in6 *)pai->ai_addr)->sin6_addr, s, sizeof(s));
+        	    inet_ntop(pai->ai_family,  &((struct sockaddr_in6 *)pai->ai_addr)->sin6_addr, s, sizeof(s));
                 std::cout << "\t" << s << std::endl;
             }
         }
