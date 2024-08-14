@@ -65,10 +65,11 @@ public:
         m_addrs.push_back(std::make_pair(ai, index));
     }
 
-    void to_str(auto str) const
+    template<typename DEST>
+    void to_str(DEST &strm) const
     {
         char s[INET6_ADDRSTRLEN];
-        str << m_name << " ips: \n";
+        strm << m_name << " ips: \n";
 
         for (auto [pai, index] : m_addrs)
         {
@@ -80,7 +81,7 @@ public:
             {
         	    inet_ntop(pai->ai_family,  &((struct sockaddr_in6 *)pai->ai_addr)->sin6_addr, s, sizeof(s));
             }
-            str << "\t" << s << '\n';
+            strm << "\t" << s << '\n';
         }
     }
 
