@@ -65,7 +65,7 @@ public:
         m_addrs.push_back(std::make_pair(ai, index));
     }
 
-    void to_str(auto str)
+    void to_str(auto str) const
     {
         char s[INET6_ADDRSTRLEN];
         str << m_name << " ips: \n";
