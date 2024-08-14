@@ -1,4 +1,5 @@
 #include "servers.h"
+#include "string_helpers.h"
 
 #include <charconv>
 #include <climits>
@@ -10,6 +11,8 @@
 
 using dsy::string_view;
 using namespace std::literals;
+
+static uint32_t s_verbose = 0;
 
 struct my_nump : std::numpunct<char>
 {
@@ -54,33 +57,40 @@ void check_equals(auto left, auto right, std::string_view desc, const std::sourc
 // age old problem of maintaining a static list of servers that hopefully don't stop resolving
 // will have to figure out running a local dns resolver that we can add a series of generated server names to
 
-static std::vector<std::string_view> server_names = { "www.google.com"sv,
-                                                      "www.yahoo.com"sv,
-                                                      "www.microsoft.com"sv,
-                                                      "en.cppreference.com"sv,
-                                                      "www.facebook.com"sv,
-                                                      "linux.die.net"sv };
-static std::string servers_string;
+// systemd-resolve should work as a local test dns
+// conf files can be dropped in the following dirs
+// /usr/lib/systemd/*.conf.d/      drwxr-xr-x
+// /usr/local/lib/systemd/*.conf.d/ No such file or directory
+// /etc/systemd/*.conf.d/          drwxr-xr-x
+
+static std::vector<std::string_view> s_server_names = { "www.google.com"sv,
+                                                        "www.yahoo.com"sv,
+                                                        "www.microsoft.com"sv,
+                                                        "en.cppreference.com"sv,
+                                                        "www.facebook.com"sv,
+                                                        "linux.die.net"sv };
+static std::string s_servers_string;
 
 void init()
 {
-    servers_string = "";
-    for (auto iter : server_names)
+    s_servers_string = "";
+    for (auto iter : s_server_names)
     {
-        servers_string += iter;
-        servers_string += ',';
+        s_servers_string += iter;
+        s_servers_string += ',';
     }
-    servers_string.pop_back();
+    s_servers_string.pop_back();
 }
 
 void test_a4()
 {
     init();
     servers my_servers;
-    my_servers.add_servers(servers_string, 443);
+    my_servers.add_servers(s_servers_string, 443);
     my_servers.resolve_addrs();
 
-    //my_servers.print_servers_detailed();
+    if (s_verbose)
+        my_servers.print_servers_detailed();
 
     std::string buff;
     my_servers.build_servers_string(buff, false, 5);
@@ -91,7 +101,7 @@ void test_a4()
     servers servers_again;
     servers_again.unpersist_servers(persist_file);
     // add any new servers, then start resolution
-    servers_again.add_servers(servers_string, 443);
+    servers_again.add_servers(s_servers_string, 443);
 
     std::string buff2;
     servers_again.build_servers_string(buff2);
@@ -107,5 +117,13 @@ void test_a4()
 
 int main (int argc, char **argv)
 {
+    for (int i = 1; i < argc; i++)
+    {
+        auto [key, val] = split(string_view(argv[i]), '=');
+        if (key == "--server"sv)
+            s_server_names.push_back(val);
+        else if (key == "--verbose"sv || key == "-v"sv)
+            s_verbose++;
+    }
     test_a4();
 }
