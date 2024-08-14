@@ -59,10 +59,39 @@ public:
     void add_addrinfo(addrinfo *ai)
     {
         m_addrs.push_back(std::make_pair(ai, m_addrs.size()));
+        if (server::s_verbose)
+        {
+            std::cout << "adding addr: ";
+            addr_to_str(ai, std::cout);
+            std::cout << std::endl;
+        }
     }
+
     void add_addrinfo(addrinfo *ai, uint32_t index)
     {
         m_addrs.push_back(std::make_pair(ai, index));
+        if (server::s_verbose)
+        {
+            std::cout << "adding addr:\n";
+            addr_to_str(ai, std::cout);
+            std::cout << std::endl;
+        }
+    }
+
+    template<typename DEST>
+    void addr_to_str(addrinfo *pai, DEST &strm) const
+    {
+        char s[INET6_ADDRSTRLEN];
+        if (pai->ai_family == AF_INET6)
+        {
+            inet_ntop(pai->ai_family,  &((struct sockaddr_in *)pai->ai_addr)->sin_addr, s, sizeof(s));
+        }
+        else
+        {
+            inet_ntop(pai->ai_family,  &((struct sockaddr_in6 *)pai->ai_addr)->sin6_addr, s, sizeof(s));
+        }
+        strm << s;
+
     }
 
     template<typename DEST>
@@ -73,15 +102,9 @@ public:
 
         for (auto [pai, index] : m_addrs)
         {
-            if (pai->ai_family == AF_INET6)
-            {
-        	    inet_ntop(pai->ai_family,  &((struct sockaddr_in *)pai->ai_addr)->sin_addr, s, sizeof(s));
-            }
-            else
-            {
-        	    inet_ntop(pai->ai_family,  &((struct sockaddr_in6 *)pai->ai_addr)->sin6_addr, s, sizeof(s));
-            }
-            strm << "\t" << s << '\n';
+            strm << '\t';
+            addr_to_str(pai, strm);
+            strm << '\n';
         }
     }
 
@@ -195,6 +218,8 @@ public:
 
     size_t addr_cnt() const { return m_addrs.size(); }
 
+    static void set_verbose(uint32_t level) { server::s_verbose = level; }
+
 private:
     std::string m_name;
     std::string m_alt_name;
@@ -214,6 +239,8 @@ private:
     uint64_t m_end_dns = 0;
     dns_query *m_a4_dns_qry = nullptr; // public for now
     dns_query *m_a6_dns_qry = nullptr; // public for now
+
+    inline static uint32_t s_verbose = 0;
 
     // need to store the addrinfo*'s in a vector for easier sorting
     // will sort based on v4/v6 preference
@@ -389,7 +416,11 @@ std::cout << "get_server, m_run: " << m_run << std::endl;
     void set_max_dns_ttl(uint32_t ttl) { m_max_dns_ttl = ttl; }
     uint32_t get_max_dns_ttl() const { return m_max_dns_ttl; }
 
-    void set_verbose(uint32_t level) { m_verbose = level; }
+    void set_verbose(uint32_t level)
+    {
+        m_verbose = level;
+        server::set_verbose(level);
+    }
 
     void a4_resolved(struct dns_rr_a4 *result, server *srv)
     {
