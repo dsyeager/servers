@@ -195,17 +195,29 @@ public:
         {
 // TODO handle ipv6
 // delay working on connect until I have a proper ground to run my servers with.
-            int fd = socket(pai->ai_family, SOCK_STREAM | SOCK_NONBLOCK, 0);
-            sockaddr *addr = pai->ai_addr;
+            int fd = -1;
+            if (pai->ai_family == AF_INET)
+            {
+                if (s_verbose > 1)
+                    std::cerr << "non_blocking_connect, ai_family == AF_INET" << std::endl;
+                fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+            }
+            else if (pai->ai_family == AF_INET6)
+            {
+                if (s_verbose > 1)
+                    std::cerr << "non_blocking_connect, ai_family == AF_INET6" << std::endl;
+                fd = socket(AF_INET6, SOCK_STREAM | SOCK_NONBLOCK, 0);
+            }
 
-            int res = connect(fd, addr, sizeof(*addr));
+            int res = connect(fd, pai->ai_addr, pai->ai_addrlen);
             if (!res || errno == EINPROGRESS)
             {
                 return fd;
             }
+
             std::cerr << "connect failed, res: " << res
                       << ", fd: " << fd
-                      << ", error: " << strerror(errno) << std::endl;
+                      << ", errno: " << errno << ", error: " << strerror(errno) << std::endl;
             ++failures;
         }
 
