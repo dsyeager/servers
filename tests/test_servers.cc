@@ -1,3 +1,4 @@
+#include "commas.h"
 #include "servers.h"
 #include "string_helpers.h"
 
@@ -11,21 +12,9 @@
 
 using dsy::string_view;
 using namespace std::literals;
+using std::cout, std::cerr, std::endl;
 
 static uint32_t s_verbose = 0;
-
-struct my_nump : std::numpunct<char>
-{
-    std::string do_grouping() const { return "\3"; }
-};
-
-std::string commas(uint64_t n)
-{
-    std::ostringstream s;
-    s.imbue(std::locale(s.getloc(), new my_nump));
-    s << n;
-    return s.str();
-}
 
 class tester
 {
@@ -63,12 +52,14 @@ void check_equals(auto left, auto right, std::string_view desc, const std::sourc
 // /usr/local/lib/systemd/*.conf.d/ No such file or directory
 // /etc/systemd/*.conf.d/          drwxr-xr-x
 
-static std::vector<std::string_view> s_server_names = { "www.google.com"sv,
-                                                        "www.yahoo.com"sv,
-                                                        "www.microsoft.com"sv,
-                                                        "en.cppreference.com"sv,
-                                                        "www.facebook.com"sv,
-                                                        "linux.die.net"sv };
+static std::vector<std::string_view> s_default_server_names = { "www.google.com"sv,
+                                                                "www.yahoo.com"sv,
+                                                                "www.microsoft.com"sv,
+                                                                "en.cppreference.com"sv,
+                                                                "www.facebook.com"sv,
+                                                                "linux.die.net"sv };
+static std::vector<std::string_view> s_server_names;
+
 static std::string s_servers_string;
 
 void init()
@@ -86,6 +77,7 @@ void test_a4()
 {
     init();
     servers my_servers;
+    my_servers.set_verbose(s_verbose);
     my_servers.add_servers(s_servers_string, 443);
     my_servers.resolve_addrs();
 
@@ -99,6 +91,7 @@ void test_a4()
     my_servers.persist_servers(persist_file, 5); // 5 sec min ttl
 
     servers servers_again;
+    servers_again.set_verbose(s_verbose);
     servers_again.unpersist_servers(persist_file);
     // add any new servers, then start resolution
     servers_again.add_servers(s_servers_string, 443);
@@ -106,10 +99,10 @@ void test_a4()
     std::string buff2;
     servers_again.build_servers_string(buff2);
 
-    if (buff != buff2)
+    if (buff != buff2 || s_verbose)
     {
-        std::cout << "buff, len: " << buff.length() << '\n' << buff << std::endl;
-        std::cout << "buff2, len: " << buff2.length() << '\n' << buff2 << std::endl;
+        cout << "buff, len: " << add_commas(buff.length()) << '\n' << buff << endl;
+        cout << "buff2, len: " << add_commas(buff2.length()) << '\n' << buff2 << endl;
     }
 
     check_equals(buff, buff2, "Server strings are equal"sv);
@@ -125,5 +118,11 @@ int main (int argc, char **argv)
         else if (key == "--verbose"sv || key == "-v"sv)
             s_verbose++;
     }
+
+    if (s_server_names.empty())
+    {
+        s_server_names = s_default_server_names;
+    }
+
     test_a4();
 }

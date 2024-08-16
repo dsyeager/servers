@@ -1,5 +1,6 @@
 #pragma once
 
+#include "commas.h"
 #include "from_file.h"
 #include "get_nanoseconds.h"
 #include "ntoa.h"
@@ -59,7 +60,7 @@ public:
     void add_addrinfo(addrinfo *ai)
     {
         m_addrs.push_back(std::make_pair(ai, m_addrs.size()));
-        if (server::s_verbose)
+        if (server::s_verbose > 1)
         {
             std::cout << "adding addr: ";
             addr_to_str(ai, std::cout);
@@ -70,7 +71,7 @@ public:
     void add_addrinfo(addrinfo *ai, uint32_t index)
     {
         m_addrs.push_back(std::make_pair(ai, index));
-        if (server::s_verbose)
+        if (server::s_verbose > 1)
         {
             std::cout << "adding addr:\n";
             addr_to_str(ai, std::cout);
@@ -84,14 +85,13 @@ public:
         char s[INET6_ADDRSTRLEN];
         if (pai->ai_family == AF_INET6)
         {
-            inet_ntop(pai->ai_family,  &((struct sockaddr_in *)pai->ai_addr)->sin_addr, s, sizeof(s));
+            inet_ntop(pai->ai_family,  &((struct sockaddr_in6 *)pai->ai_addr)->sin6_addr, s, sizeof(s));
         }
         else
         {
-            inet_ntop(pai->ai_family,  &((struct sockaddr_in6 *)pai->ai_addr)->sin6_addr, s, sizeof(s));
+            inet_ntop(pai->ai_family,  &((struct sockaddr_in *)pai->ai_addr)->sin_addr, s, sizeof(s));
         }
         strm << s;
-
     }
 
     template<typename DEST>
@@ -348,7 +348,7 @@ std::cout << "get_server, m_run: " << m_run << std::endl;
             srv->to_string(buff);
             buff += '\n';
             if (verbose)
-                buff << '\t' << "dns ns: " << srv->get_dns_ns() << '\n';
+                buff << '\t' << "dns ns: " << add_commas(srv->get_dns_ns()) << '\n';
         }
         buff.pop_back();
     }
