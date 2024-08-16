@@ -189,16 +189,16 @@ public:
 
     int non_blocking_connect() const
     {
-        int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
         int failures = 0;
 
         for (auto [pai, index] : m_addrs)
         {
 // TODO handle ipv6
 // delay working on connect until I have a proper ground to run my servers with.
+            int fd = socket(pai->ai_family, SOCK_STREAM | SOCK_NONBLOCK, 0);
             sockaddr *addr = pai->ai_addr;
 
-            int res = connect(fd, (struct sockaddr*)pai->ai_addr, sizeof(*pai->ai_addr));
+            int res = connect(fd, addr, sizeof(*addr));
             if (!res || errno == EINPROGRESS)
             {
                 return fd;
