@@ -3,6 +3,7 @@
 #include "commas.h"
 #include "from_file.h"
 #include "get_nanoseconds.h"
+#include "log.h"
 #include "ntoa.h"
 #include "string_view.h"
 #include "to_file.h"
@@ -29,6 +30,10 @@ using namespace std::chrono_literals;
 
 // plan on 200K servers, probably less for a while but lets anticipate
 
+
+namespace dsy
+{
+
 class servers; // forward declare
 
 class server
@@ -49,7 +54,7 @@ public:
             sv_port.aton(m_port);
         }
         m_alt_name = name;
-        //std::cout << m_name << ", alt: " << m_alt_name << ", port: " << m_port << std::endl;
+        //TRACE(2) << m_name << ", alt: " << m_alt_name << ", port: " << m_port << ENDL;
     }
 
     dsy::string_view name() const { return m_name; }
@@ -60,27 +65,21 @@ public:
     void add_addrinfo(addrinfo *ai)
     {
         m_addrs.push_back(std::make_pair(ai, m_addrs.size()));
-        if (server::s_verbose > 1)
-        {
-            std::cout << "adding addr: ";
-            addr_to_str(ai, std::cout);
-            std::cout << std::endl;
-        }
+        static thread_local std::string buff = "";
+        buff.clear();
+        TRACE(2) << "adding addr: " << addr_to_str(ai, buff) << ENDL;
     }
 
     void add_addrinfo(addrinfo *ai, uint32_t index)
     {
         m_addrs.push_back(std::make_pair(ai, index));
-        if (server::s_verbose > 1)
-        {
-            std::cout << "adding addr:\n";
-            addr_to_str(ai, std::cout);
-            std::cout << std::endl;
-        }
+        static thread_local std::string buff = "";
+        buff.clear();
+        TRACE(2) << "adding addr: " << addr_to_str(ai, buff) << ENDL;
     }
 
     template<typename DEST>
-    void addr_to_str(addrinfo *pai, DEST &strm) const
+    DEST& addr_to_str(addrinfo *pai, DEST &strm) const
     {
         char s[INET6_ADDRSTRLEN];
         if (pai->ai_family == AF_INET6)
@@ -92,10 +91,11 @@ public:
             inet_ntop(pai->ai_family,  &((struct sockaddr_in *)pai->ai_addr)->sin_addr, s, sizeof(s));
         }
         strm << s;
+        return strm;
     }
 
     template<typename DEST>
-    void to_str(DEST &strm) const
+    DEST& to_str(DEST &strm) const
     {
         char s[INET6_ADDRSTRLEN];
         strm << m_name << " ips: \n";
@@ -106,6 +106,7 @@ public:
             addr_to_str(pai, strm);
             strm << '\n';
         }
+        return strm;
     }
 
     time_t get_dns_expires() const { return m_dns_expires; }
@@ -176,7 +177,7 @@ public:
                                   &cur);
             if (res != 0)
             {
-                std::cout << "getaddrinfo failed for " << ip << std::endl;
+                ERROR << "getaddrinfo failed for " << ip << ENDL;
                 continue;
             }
             index.aton(ind);
@@ -198,14 +199,12 @@ public:
             int fd = -1;
             if (pai->ai_family == AF_INET)
             {
-                if (s_verbose > 1)
-                    std::cerr << "non_blocking_connect, ai_family == AF_INET" << std::endl;
+                TRACE(2) << "non_blocking_connect, ai_family == AF_INET" << ENDL;
                 fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
             }
             else if (pai->ai_family == AF_INET6)
             {
-                if (s_verbose > 1)
-                    std::cerr << "non_blocking_connect, ai_family == AF_INET6" << std::endl;
+                TRACE(2) << "non_blocking_connect, ai_family == AF_INET6" << ENDL;
                 fd = socket(AF_INET6, SOCK_STREAM | SOCK_NONBLOCK, 0);
             }
 
@@ -215,9 +214,9 @@ public:
                 return fd;
             }
 
-            std::cerr << "connect failed, res: " << res
-                      << ", fd: " << fd
-                      << ", errno: " << errno << ", error: " << strerror(errno) << std::endl;
+            ERROR << "connect failed, res: " << res
+                  << ", fd: " << fd
+                  << ", errno: " << errno << ", error: " << strerror(errno) << ENDL;
             ++failures;
         }
 
@@ -229,8 +228,6 @@ public:
     bool is_dns_pending() { return m_a4_dns_qry || m_a6_dns_qry; } // could just be return m_a4_dns_qry - m_a6_dns_qry
 
     size_t addr_cnt() const { return m_addrs.size(); }
-
-    static void set_verbose(uint32_t level) { server::s_verbose = level; }
 
 private:
     std::string m_name;
@@ -252,8 +249,6 @@ private:
     dns_query *m_a4_dns_qry = nullptr; // public for now
     dns_query *m_a6_dns_qry = nullptr; // public for now
 
-    inline static uint32_t s_verbose = 0;
-
     // need to store the addrinfo*'s in a vector for easier sorting
     // will sort based on v4/v6 preference
 
@@ -263,7 +258,7 @@ private:
     // serialize in
     // - for each ip call getaddrinfo adding results to m_addrs.
     // - but only if not expired
-};
+}; // end of server
 
 
 class servers
@@ -298,20 +293,19 @@ could:
 3. persist the resolved addrs
 */
         std::unique_lock alock(m_mutex);
-std::cout << "get_server, m_run: " << m_run << std::endl;
+        TRACE(1) << "get_server, m_run: " << m_run << ENDL;
         while (m_run && m_servers_resolved.empty() && (m_servers_processed.empty() || m_servers_processed.size() != m_servers.size()))
         {
         // might want an m_run var for early termination
-       //     std::cout << "waiting, thread: " << std::this_thread::get_id() << std::endl;
+       //     TRACE(2) << "waiting, thread: " << std::this_thread::get_id() << ENDL;
             m_waiters++;
             auto ret = m_cond.wait_for(alock, 100ms);
             m_waiters--;
             if (std::cv_status::timeout == ret)
             {
-                if (m_verbose)
-               	    std::cout << "cond wait timed out" << std::endl;
+               	TRACE(2) << "cond wait timed out" << ENDL;
             }
-            //    std::cout << "woke up, thread: " << std::this_thread::get_id() << std::endl;
+            TRACE(3) << "woke up, thread: " << std::this_thread::get_id() << ENDL;
         }
 
         server* ret = nullptr;
@@ -321,7 +315,7 @@ std::cout << "get_server, m_run: " << m_run << std::endl;
             ret = m_servers_resolved.back();
             m_servers_resolved.pop_back();
             m_servers_processed.push_back(ret);
-            //std::cout << "servers::get_server, moved " << ret->name() << " to the processed vector" << std::endl;
+            TRACE(2) << "servers::get_server, moved " << ret->name() << " to the processed vector" << ENDL;
         }
 
         return ret;
@@ -331,22 +325,22 @@ std::cout << "get_server, m_run: " << m_run << std::endl;
     {
         for (auto &[name, srv] : m_servers)
         {
-            std::cerr << "parsed: " << name << std::endl;
+            TRACE(0) << "parsed: " << name << ENDL;
         }
 
         for (auto &srv : m_servers_resolved)
         {
-            std::cerr << "resolved: " << srv->name() << std::endl;
+            TRACE(0) << "resolved: " << srv->name() << ENDL;
         }
 
         for (auto &srv : m_servers_processed)
         {
-            std::cerr << "processed: " << srv->name() << std::endl;
+            TRACE(0) << "processed: " << srv->name() << ENDL;
         }
 
-        std::cerr << "parsed: " << m_servers.size()
-                  << ", resolved: " << m_servers_resolved.size()
-                  << ", processed: " << m_servers_processed.size() << std::endl;
+        TRACE(0) << "parsed: " << m_servers.size()
+                 << ", resolved: " << m_servers_resolved.size()
+                 << ", processed: " << m_servers_processed.size() << ENDL;
     }
 
     void build_servers_string(std::string &buff, bool verbose = false, uint32_t min_ttl = 0)
@@ -369,7 +363,7 @@ std::cout << "get_server, m_run: " << m_run << std::endl;
     {
         std::string buff;
         build_servers_string(buff, true);
-        std::cout << buff << std::endl;
+        TRACE(0) << buff << ENDL;
     }
 
     void persist_servers(const char* fpath, uint32_t min_ttl)
@@ -413,11 +407,8 @@ std::cout << "get_server, m_run: " << m_run << std::endl;
             }
         }
 
-        if (m_verbose)
-        {
-            std::cerr << "resolve_addrs, loops: " << loops
-                      << ", servers resolved: " << m_servers_resolved.size() << std::endl;
-        }
+        TRACE(1) << "resolve_addrs, loops: " << loops
+                 << ", servers resolved: " << m_servers_resolved.size() << ENDL;
         return true;
     }
 
@@ -428,20 +419,13 @@ std::cout << "get_server, m_run: " << m_run << std::endl;
     void set_max_dns_ttl(uint32_t ttl) { m_max_dns_ttl = ttl; }
     uint32_t get_max_dns_ttl() const { return m_max_dns_ttl; }
 
-    void set_verbose(uint32_t level)
-    {
-        m_verbose = level;
-        server::set_verbose(level);
-    }
-
     void a4_resolved(struct dns_rr_a4 *result, server *srv)
     {
         srv->set_end_dns(get_nanoseconds());
         if (!result)
         {
             srv->set_a4_dns_qry(nullptr);
-            if (m_verbose)
-                std::cerr << "a4 failed for " << srv->name() << std::endl;
+            TRACE(1) << "a4 failed for " << srv->name() << ENDL;
             if (!srv->is_dns_pending())
             {
                 if (srv->addr_cnt())
@@ -450,7 +434,9 @@ std::cout << "get_server, m_run: " << m_run << std::endl;
                     m_cond.notify_one();
                 }
                 else
+                {
                     m_servers_failed_dns.push_back(srv);
+                }
             }
             return;
         }
@@ -458,8 +444,7 @@ std::cout << "get_server, m_run: " << m_run << std::endl;
         dsy::string_view host = result->dnsa4_cname;
 
         uint32_t ttl = result->dnsa4_ttl ? std::min(result->dnsa4_ttl, m_max_dns_ttl) : m_max_dns_ttl;
-        if (m_verbose > 1)
-            std::cerr << "a4: cname: " << result->dnsa4_cname << ", ttl: " << ttl << std::endl;
+        TRACE(2) << "a4: cname: " << result->dnsa4_cname << ", ttl: " << ttl << ENDL;
 
         srv->set_dns_expires(ttl);
         struct addrinfo* cur = nullptr;
@@ -502,8 +487,7 @@ std::cout << "get_server, m_run: " << m_run << std::endl;
         srv->set_end_dns(get_nanoseconds());
         if (!result)
         {
-            if (m_verbose)
-                std::cout << "a6 failed for " << srv->name() << std::endl;
+            TRACE(2) << "a6 failed for " << srv->name() << ENDL;
             srv->set_a6_dns_qry(nullptr);
             if (!srv->is_dns_pending())
             {
@@ -521,8 +505,7 @@ std::cout << "get_server, m_run: " << m_run << std::endl;
         dsy::string_view host = result->dnsa6_cname;
 
         uint32_t ttl = result->dnsa6_ttl ? std::min(result->dnsa6_ttl, m_max_dns_ttl) : m_max_dns_ttl;
-        if (m_verbose > 1)
-            std::cout << "a6: cname: " << result->dnsa6_cname << ", ttl: " << ttl << std::endl;
+        TRACE(2) << "a6: cname: " << result->dnsa6_cname << ", ttl: " << ttl << ENDL;
 
         // assumes that v4 and v6 have same expiration
         srv->set_dns_expires(ttl);
@@ -626,9 +609,8 @@ private:
                 }
                 else
                 {
-                    if (m_verbose)
-                        std::cout << "start_resolution, m_dns_host entry is expired, host: " << name
-                                  << ", now >= exp (" << now << " >= " << expires << "), " << exp_str << std::endl;
+                    TRACE(2) << "m_dns_host entry is expired, host: " << name
+                             << ", now >= exp (" << now << " >= " << expires << "), " << exp_str << ENDL;
                 }
             }
 
@@ -650,8 +632,7 @@ private:
                                               srv));
         }
 
-        if (m_verbose)
-            std::cout << "started resolution for " << m_servers.size() << " addrs" << std::endl;
+        TRACE(2) << "started resolution for " << m_servers.size() << " addrs" << ENDL;
     }
 
 private:
@@ -672,7 +653,8 @@ private:
     uint32_t m_max_dns_ttl = 6 * 3600;
 
     size_t m_resolved_cnt = 0;
-    uint32_t m_verbose = 0;
 
     bool m_run = true;
-};
+}; // end of servers
+
+}; // end of namespace
