@@ -1,4 +1,5 @@
 #include "commas.h"
+#include "log.h"
 #include "servers.h"
 #include "string_helpers.h"
 
@@ -13,8 +14,6 @@
 using dsy::string_view;
 using namespace std::literals;
 using std::cout, std::cerr, std::endl;
-
-static uint32_t s_verbose = 0;
 
 class tester
 {
@@ -76,12 +75,11 @@ void init()
 void test_a4()
 {
     init();
-    servers my_servers;
-    my_servers.set_verbose(s_verbose);
+    dsy::servers my_servers;
     my_servers.add_servers(s_servers_string, 443);
     my_servers.resolve_addrs();
 
-    if (s_verbose)
+    if (dsy::logs::verbose)
         my_servers.print_servers_detailed();
 
     std::string buff;
@@ -90,8 +88,7 @@ void test_a4()
     const char *persist_file = "persisted_dns.txt";
     my_servers.persist_servers(persist_file, 5); // 5 sec min ttl
 
-    servers servers_again;
-    servers_again.set_verbose(s_verbose);
+    dsy::servers servers_again;
     servers_again.unpersist_servers(persist_file);
     // add any new servers, then start resolution
     servers_again.add_servers(s_servers_string, 443);
@@ -99,7 +96,7 @@ void test_a4()
     std::string buff2;
     servers_again.build_servers_string(buff2);
 
-    if (buff != buff2 || s_verbose)
+    if (buff != buff2 || dsy::logs::verbose)
     {
         cout << "buff, len: " << add_commas(buff.length()) << '\n' << buff << endl;
         cout << "buff2, len: " << add_commas(buff2.length()) << '\n' << buff2 << endl;
@@ -116,7 +113,7 @@ int main (int argc, char **argv)
         if (key == "--server"sv)
             s_server_names.push_back(val);
         else if (key == "--verbose"sv || key == "-v"sv)
-            s_verbose++;
+            dsy::logs::verbose++;
     }
 
     if (s_server_names.empty())
