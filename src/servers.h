@@ -23,6 +23,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -54,7 +55,7 @@ public:
             sv_port.aton(m_port);
         }
         m_alt_name = name;
-        //TRACE(2) << m_name << ", alt: " << m_alt_name << ", port: " << m_port << ENDL;
+        //DEBUG(2) << m_name << ", alt: " << m_alt_name << ", port: " << m_port << ENDL;
     }
 
     dsy::string_view name() const { return m_name; }
@@ -67,7 +68,7 @@ public:
         m_addrs.push_back(std::make_pair(ai, m_addrs.size()));
         static thread_local std::string buff = "";
         buff.clear();
-        TRACE(2) << "adding addr: " << addr_to_str(ai, buff) << ENDL;
+        DEBUG(2) << "adding addr: " << addr_to_str(ai, buff) << ENDL;
     }
 
     void add_addrinfo(addrinfo *ai, uint32_t index)
@@ -75,7 +76,7 @@ public:
         m_addrs.push_back(std::make_pair(ai, index));
         static thread_local std::string buff = "";
         buff.clear();
-        TRACE(2) << "adding addr: " << addr_to_str(ai, buff) << ENDL;
+        DEBUG(2) << "adding addr: " << addr_to_str(ai, buff) << ENDL;
     }
 
     template<typename DEST>
@@ -137,7 +138,7 @@ public:
         }
     }
 
-    void to_string(std::string &buff)
+    void to_string(std::string &buff) const
     {
         // <host> <expires> <csv ip list>
         buff += m_name;
@@ -196,15 +197,17 @@ public:
         {
 // TODO handle ipv6
 // delay working on connect until I have a proper ground to run my servers with.
+// TODO Moving towards IO_uring for all aspects including the connect
+//      There should be an app or thread level io_uring_wrapper object to handle the connect
             int fd = -1;
             if (pai->ai_family == AF_INET)
             {
-                TRACE(2) << "non_blocking_connect, ai_family == AF_INET" << ENDL;
+                DEBUG(2) << "non_blocking_connect, ai_family == AF_INET" << ENDL;
                 fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
             }
             else if (pai->ai_family == AF_INET6)
             {
-                TRACE(2) << "non_blocking_connect, ai_family == AF_INET6" << ENDL;
+                DEBUG(2) << "non_blocking_connect, ai_family == AF_INET6" << ENDL;
                 fd = socket(AF_INET6, SOCK_STREAM | SOCK_NONBLOCK, 0);
             }
 
@@ -221,6 +224,46 @@ public:
         }
 
         return -1;
+    }
+
+    /**
+      It is tempting to pass in a io_uring_wrapper and call prep_connect from here but I'm not liking the depencies that creates.
+      I'm thinking it is cleaner to give the caller a socket using the current or next addr from m_addrs and let the caller do something with it.
+
+
+      */
+    auto get_socket(bool advance_to_next = true) const
+    {
+        if (advance_to_next)
+        {
+            if (m_addr_index == -1)
+                m_addr_index = 0;
+            else
+            {
+                m_addr_index++;
+                if (m_addr_index >= m_addrs.size())
+                    m_addr_index = 0;
+            }
+        }
+
+        if (m_addr_index == -1)
+            m_addr_index = 0;
+
+        auto [pai, index] = m_addrs[m_addr_index];
+
+        int fd = -1;
+        if (pai->ai_family == AF_INET)
+        {
+            DEBUG(2) << "ai_family == AF_INET" << ENDL;
+            fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+        }
+        else if (pai->ai_family == AF_INET6)
+        {
+            DEBUG(2) << "ai_family == AF_INET6" << ENDL;
+            fd = socket(AF_INET6, SOCK_STREAM | SOCK_NONBLOCK, 0);
+        }
+
+        return std::make_tuple(fd, pai->ai_addr, pai->ai_addrlen);
     }
 
     void set_a4_dns_qry(dns_query *qry) { m_a4_dns_qry = qry; }
@@ -241,6 +284,7 @@ private:
                                                            * The uint32_t value is the index value for each address as received,
                                                            * used for sorting the addresses
                                                            */
+    mutable size_t m_addr_index = -1;      // for iterating through m_addrs between calls
     servers *m_servers = nullptr;
     time_t m_dns_expires = 0;
     time_t m_start_time = 0;
@@ -282,30 +326,29 @@ public:
         start_resolution();
     }
 
+    const server* get_server(dsy::string_view host)
+    {
+        auto iter = m_servers.find(host);
+        if (iter == m_servers.end())
+            return nullptr;
+        return iter->second;
+    }
+
     const server* get_server()
     {
-/*
-I'm thinking this class should be responsible for also resolving each server/host name
-potentially with getaddrinfo_a, it has gai_suspend and some notifcation functionality
-could:
-1. read in persisted addrs
-2. resolve the unresolved addrs
-3. persist the resolved addrs
-*/
         std::unique_lock alock(m_mutex);
-        TRACE(1) << "get_server, m_run: " << m_run << ENDL;
+        DEBUG(1) << "m_run: " << m_run << ENDL;
         while (m_run && m_servers_resolved.empty() && (m_servers_processed.empty() || m_servers_processed.size() != m_servers.size()))
         {
-        // might want an m_run var for early termination
-       //     TRACE(2) << "waiting, thread: " << std::this_thread::get_id() << ENDL;
+            DEBUG(9) << "waiting, thread: " << uint32_t(pthread_self()) << ENDL;
             m_waiters++;
             auto ret = m_cond.wait_for(alock, 100ms);
             m_waiters--;
             if (std::cv_status::timeout == ret)
             {
-               	TRACE(2) << "cond wait timed out" << ENDL;
+               	DEBUG(2) << "cond wait timed out" << ENDL;
             }
-            TRACE(3) << "woke up, thread: " << std::this_thread::get_id() << ENDL;
+            DEBUG(9) << "woke up, thread: " << uint32_t(pthread_self()) << ENDL;
         }
 
         server* ret = nullptr;
@@ -315,7 +358,7 @@ could:
             ret = m_servers_resolved.back();
             m_servers_resolved.pop_back();
             m_servers_processed.push_back(ret);
-            TRACE(2) << "servers::get_server, moved " << ret->name() << " to the processed vector" << ENDL;
+            DEBUG(3) << "servers::get_server, moved " << ret->name() << " to the processed vector" << ENDL;
         }
 
         return ret;
@@ -325,20 +368,20 @@ could:
     {
         for (auto &[name, srv] : m_servers)
         {
-            TRACE(0) << "parsed: " << name << ENDL;
+            TRACE << "parsed: " << name << ENDL;
         }
 
         for (auto &srv : m_servers_resolved)
         {
-            TRACE(0) << "resolved: " << srv->name() << ENDL;
+            TRACE << "resolved: " << srv->name() << ENDL;
         }
 
         for (auto &srv : m_servers_processed)
         {
-            TRACE(0) << "processed: " << srv->name() << ENDL;
+            TRACE << "processed: " << srv->name() << ENDL;
         }
 
-        TRACE(0) << "parsed: " << m_servers.size()
+        TRACE << "parsed: " << m_servers.size()
                  << ", resolved: " << m_servers_resolved.size()
                  << ", processed: " << m_servers_processed.size() << ENDL;
     }
@@ -363,7 +406,7 @@ could:
     {
         std::string buff;
         build_servers_string(buff, true);
-        TRACE(0) << buff << ENDL;
+        TRACE << buff << ENDL;
     }
 
     void persist_servers(const char* fpath, uint32_t min_ttl)
@@ -407,7 +450,7 @@ could:
             }
         }
 
-        TRACE(1) << "resolve_addrs, loops: " << loops
+        DEBUG(1) << "resolve_addrs, loops: " << loops
                  << ", servers resolved: " << m_servers_resolved.size() << ENDL;
         return true;
     }
@@ -425,7 +468,7 @@ could:
         if (!result)
         {
             srv->set_a4_dns_qry(nullptr);
-            TRACE(1) << "a4 failed for " << srv->name() << ENDL;
+            DEBUG(1) << "a4 failed for " << srv->name() << ENDL;
             if (!srv->is_dns_pending())
             {
                 if (srv->addr_cnt())
@@ -444,7 +487,7 @@ could:
         dsy::string_view host = result->dnsa4_cname;
 
         uint32_t ttl = result->dnsa4_ttl ? std::min(result->dnsa4_ttl, m_max_dns_ttl) : m_max_dns_ttl;
-        TRACE(2) << "a4: cname: " << result->dnsa4_cname << ", ttl: " << ttl << ENDL;
+        DEBUG(2) << "a4: cname: " << result->dnsa4_cname << ", ttl: " << ttl << ENDL;
 
         srv->set_dns_expires(ttl);
         struct addrinfo* cur = nullptr;
@@ -487,7 +530,7 @@ could:
         srv->set_end_dns(get_nanoseconds());
         if (!result)
         {
-            TRACE(2) << "a6 failed for " << srv->name() << ENDL;
+            DEBUG(2) << "a6 failed for " << srv->name() << ENDL;
             srv->set_a6_dns_qry(nullptr);
             if (!srv->is_dns_pending())
             {
@@ -505,7 +548,7 @@ could:
         dsy::string_view host = result->dnsa6_cname;
 
         uint32_t ttl = result->dnsa6_ttl ? std::min(result->dnsa6_ttl, m_max_dns_ttl) : m_max_dns_ttl;
-        TRACE(2) << "a6: cname: " << result->dnsa6_cname << ", ttl: " << ttl << ENDL;
+        DEBUG(2) << "a6: cname: " << result->dnsa6_cname << ", ttl: " << ttl << ENDL;
 
         // assumes that v4 and v6 have same expiration
         srv->set_dns_expires(ttl);
@@ -609,7 +652,7 @@ private:
                 }
                 else
                 {
-                    TRACE(2) << "m_dns_host entry is expired, host: " << name
+                    DEBUG(2) << "m_dns_host entry is expired, host: " << name
                              << ", now >= exp (" << now << " >= " << expires << "), " << exp_str << ENDL;
                 }
             }
@@ -632,7 +675,7 @@ private:
                                               srv));
         }
 
-        TRACE(2) << "started resolution for " << m_servers.size() << " addrs" << ENDL;
+        DEBUG(2) << "started resolution for " << m_servers.size() << " addrs" << ENDL;
     }
 
 private:
